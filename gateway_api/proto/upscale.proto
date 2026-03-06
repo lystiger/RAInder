@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package super_res;
+
+service ImageUpscaler {
+  rpc Process(UpscaleRequest) returns (UpscaleResponse);
+}
+
+message UpscaleRequest {
+  bytes raw_image = 1;
+  string model_name = 2;
+  float scale_factor = 3;
+}
+
+message UpscaleResponse {
+  bytes upscaled_image = 1;
+  int32 width = 2;
+  int32 height = 3;
+  float compute_latency_ms = 4;
+}
