@@ -1,0 +1,37 @@
+services:
+  triton:
+    image: nvcr.io/nvidia/tritonserver:24.10-py3
+    command: >
+      tritonserver
+      --model-repository=/models
+      --model-control-mode=explicit
+      --load-model=super_resolution_model
+    volumes:
+      - ./model_repo:/models
+    ports:
+      - "8001:8001"
+      - "8002:8002"
+      - "8003:8000"
+    gpus: all
+
+  gateway:
+    build:
+      context: ./gateway_api
+    environment:
+      TRITON_URL: triton:8001
+      TRITON_MODEL_NAME: super_resolution_model
+      CORS_ORIGINS: http://localhost:5173,http://localhost:5174
+    depends_on:
+      - triton
+    ports:
+      - "8000:8000"
+
+  webapp:
+    build:
+      context: ./webapp
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      - gateway
+    ports:
+      - "5173:5173"

@@ -28,6 +28,33 @@ class TritonClient:
         self.mock_mode = os.getenv("TRITON_MOCK", "false").lower() in {"1", "true", "yes"}
         self.client = grpcclient.InferenceServerClient(url=self.triton_url)
 
+    def readiness(self, model_name: str | None = None) -> dict[str, bool | str]:
+        """Return Triton readiness details for API probes."""
+        if self.mock_mode:
+            return {
+                "mode": "mock",
+                "server_live": True,
+                "server_ready": True,
+                "model_ready": True,
+                "model_name": model_name or self.default_model_name,
+            }
+
+        selected_model = model_name or self.default_model_name
+        try:
+            server_live = bool(self.client.is_server_live())
+            server_ready = bool(self.client.is_server_ready())
+            model_ready = bool(self.client.is_model_ready(selected_model))
+        except InferenceServerException as exc:
+            raise TritonClientError(str(exc)) from exc
+
+        return {
+            "mode": "triton",
+            "server_live": server_live,
+            "server_ready": server_ready,
+            "model_ready": model_ready,
+            "model_name": selected_model,
+        }
+
     def upscale(self, raw_image: bytes, model_name: str, scale_factor: float) -> TritonResult:
         if self.mock_mode:
             return self._mock_upscale(raw_image, scale_factor)

@@ -37,6 +37,18 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/ready")
+def ready(model_name: str | None = None) -> dict[str, bool | str]:
+    try:
+        details = triton_client.readiness(model_name=model_name)
+    except TritonClientError as exc:
+        raise HTTPException(status_code=503, detail=f"Triton readiness check failed: {exc}") from exc
+
+    if not (details["server_live"] and details["server_ready"] and details["model_ready"]):
+        raise HTTPException(status_code=503, detail=details)
+    return details
+
+
 @app.post("/upscale", response_model=UpscaleResponseModel)
 async def upscale(
     image: UploadFile = File(...),

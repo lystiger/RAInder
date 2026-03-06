@@ -32,3 +32,21 @@ cd webapp
 npm install
 npm run dev
 ```
+
+## Quick Start (Docker Compose)
+
+Requirements:
+
+- Docker + Docker Compose
+- NVIDIA Container Toolkit (for Triton GPU usage)
+
+```bash
+docker compose up --build
+```
+
+Service URLs:
+
+- Gateway API: `http://localhost:8000`
+- Webapp: `http://localhost:5173`
+- Triton gRPC: `localhost:8001`
+- Triton HTTP (mapped): `http://localhost:8003`
