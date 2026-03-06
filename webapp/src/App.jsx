@@ -133,14 +133,17 @@ export default function App() {
           {hasBoth ? (
             <>
               <div className="compare">
-                <img src={sourceUrl} alt="Original source" className="base" />
-                <div className="overlay" style={{ width: `${slider}%` }}>
-                  <img src={resultUrl} alt="Upscaled output" />
-                </div>
+                <img src={resultUrl} alt="Upscaled output" className="compare-layer layer-output" />
+                <img
+                  src={sourceUrl}
+                  alt="Original source"
+                  className="compare-layer layer-input"
+                  style={{ clipPath: `inset(0 0 0 ${slider}%)` }}
+                />
                 <div className="divider" style={{ left: `${slider}%` }} />
               </div>
               <label className="slider">
-                Compare
+                Reveal upscaled output
                 <input
                   type="range"
                   min="0"
@@ -149,6 +152,7 @@ export default function App() {
                   onChange={(e) => setSlider(Number(e.target.value))}
                 />
               </label>
+              <p className="compare-note">Top: original input. Bottom: upscaled output.</p>
             </>
           ) : (
             <div className="empty">Upload and run an image to see the comparison preview.</div>
