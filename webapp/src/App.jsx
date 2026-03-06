@@ -22,6 +22,9 @@ export default function App() {
   const [error, setError] = useState("");
   const [progressPct, setProgressPct] = useState(0);
   const [frameAspect, setFrameAspect] = useState("4 / 3");
+  const [backendMode, setBackendMode] = useState("unknown");
+  const [backendReady, setBackendReady] = useState(false);
+  const [backendModel, setBackendModel] = useState("-");
   const comparePanelRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -43,6 +46,10 @@ export default function App() {
       comparePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [hasBoth, status]);
+
+  useEffect(() => {
+    fetchBackendStatus(modelName);
+  }, [modelName]);
 
   useEffect(
     () => () => {
@@ -196,8 +203,14 @@ export default function App() {
               <strong>{latencyMs === null ? "-" : `${latencyMs.toFixed(2)} ms`}</strong>
             </div>
             <div>
-              <span>API</span>
-              <strong>{API_BASE}</strong>
+              <span>Backend</span>
+              <div className="backend-row">
+                <span className={`mode-badge ${backendReady ? "ready" : "not-ready"}`}>
+                  {backendReady ? "ready" : "not ready"}
+                </span>
+                <strong>{backendMode}</strong>
+              </div>
+              <small className="backend-detail">{backendModel}</small>
             </div>
           </div>
           <p className="state-note">State: {status}</p>
@@ -239,6 +252,30 @@ export default function App() {
       </main>
     </div>
   );
+
+  async function fetchBackendStatus(targetModel) {
+    try {
+      const url = new URL(`${API_BASE}/ready`);
+      if (targetModel) {
+        url.searchParams.set("model_name", targetModel);
+      }
+      const response = await fetch(url.toString());
+      if (!response.ok) {
+        setBackendReady(false);
+        setBackendMode("unknown");
+        setBackendModel(targetModel || "-");
+        return;
+      }
+      const data = await response.json();
+      setBackendReady(Boolean(data.model_ready && data.server_ready && data.server_live));
+      setBackendMode(data.mode || "unknown");
+      setBackendModel(data.model_name || targetModel || "-");
+    } catch (_err) {
+      setBackendReady(false);
+      setBackendMode("offline");
+      setBackendModel(targetModel || "-");
+    }
+  }
 }
 
 function readImageAspectRatio(url) {

@@ -40,7 +40,9 @@ class TritonClient:
         self.client: grpcclient.InferenceServerClient | None = None
         self.local_sessions: dict[str, Any] = {}
         self.local_input_names: dict[str, str] = {}
+        self.local_input_shapes: dict[str, list[Any]] = {}
         self.local_output_names: dict[str, str] = {}
+        self.local_output_shapes: dict[str, list[Any]] = {}
 
         if self.backend == "triton":
             self.client = grpcclient.InferenceServerClient(url=self.triton_url)
@@ -160,8 +162,12 @@ class TritonClient:
                 providers=["CPUExecutionProvider"],
             )
             self.local_sessions[model_name] = session
-            self.local_input_names[model_name] = session.get_inputs()[0].name
-            self.local_output_names[model_name] = session.get_outputs()[0].name
+            input_meta = session.get_inputs()[0]
+            self.local_input_names[model_name] = input_meta.name
+            self.local_input_shapes[model_name] = list(input_meta.shape)
+            output_meta = session.get_outputs()[0]
+            self.local_output_names[model_name] = output_meta.name
+            self.local_output_shapes[model_name] = list(output_meta.shape)
 
         if not self.local_sessions:
             raise TritonClientError(
@@ -184,10 +190,15 @@ class TritonClient:
 
         chw = decode_image_to_chw_fp32(raw_image).astype(np.float32)
         started = perf_counter()
-        output = self._run_onnx_session(request_model, chw)
+        input_shape = self.local_input_shapes[request_model]
+        tile_hw = self._extract_static_hw(input_shape)
+        if tile_hw is None:
+            output = self._run_onnx_session(request_model, chw)
+            output_chw = self._prepare_onnx_output_to_chw(request_model, output)
+        else:
+            output_chw = self._onnx_local_tiled_upscale(request_model, chw, tile_hw, scale_factor)
         duration_ms = (perf_counter() - started) * 1000.0
 
-        output_chw = self._normalize_output_shape(output)
         upscaled_image, width, height = encode_chw_fp32_to_png_bytes(output_chw)
         return TritonResult(
             upscaled_image=upscaled_image,
@@ -200,19 +211,158 @@ class TritonClient:
         session = self.local_sessions[model_name]
         input_name = self.local_input_names[model_name]
         output_name = self.local_output_names[model_name]
+        input_shape = self.local_input_shapes[model_name]
+        expected_rank = len(input_shape)
+        tensor = self._prepare_onnx_input(chw, input_shape)
+        if tensor.ndim != expected_rank:
+            raise TritonClientError(
+                f"ONNX input rank mismatch for model '{model_name}': "
+                f"prepared rank={tensor.ndim}, expected rank={expected_rank}, shape={input_shape}"
+            )
+        try:
+            outputs = session.run([output_name], {input_name: tensor})
+            return outputs[0]
+        except Exception as exc:  # pragma: no cover - depends on model signature
+            raise TritonClientError(
+                f"ONNX local inference failed for model '{model_name}': {exc}"
+            ) from exc
 
-        attempts = [np.expand_dims(chw, axis=0), chw]
-        last_exc: Exception | None = None
-        for tensor in attempts:
+    def _onnx_local_tiled_upscale(
+        self,
+        model_name: str,
+        chw: np.ndarray,
+        tile_hw: tuple[int, int],
+        fallback_scale: float,
+    ) -> np.ndarray:
+        tile_h, tile_w = tile_hw
+        in_h, in_w = chw.shape[1], chw.shape[2]
+        output_shape = self.local_output_shapes[model_name]
+        scale = self._infer_scale_factor(tile_h, tile_w, output_shape, fallback_scale)
+
+        out_h = int(round(in_h * scale))
+        out_w = int(round(in_w * scale))
+        output_canvas = np.zeros((3, out_h, out_w), dtype=np.float32)
+
+        for top in range(0, in_h, tile_h):
+            for left in range(0, in_w, tile_w):
+                bottom = min(top + tile_h, in_h)
+                right = min(left + tile_w, in_w)
+                patch = chw[:, top:bottom, left:right]
+
+                pad_h = tile_h - patch.shape[1]
+                pad_w = tile_w - patch.shape[2]
+                if pad_h > 0 or pad_w > 0:
+                    patch = np.pad(
+                        patch,
+                        ((0, 0), (0, pad_h), (0, pad_w)),
+                        mode="edge",
+                    )
+
+                patch_out_raw = self._run_onnx_session(model_name, patch)
+                patch_out = self._prepare_onnx_output_to_chw(model_name, patch_out_raw)
+                valid_out_h = int(round((bottom - top) * scale))
+                valid_out_w = int(round((right - left) * scale))
+                y0 = int(round(top * scale))
+                x0 = int(round(left * scale))
+                y1 = min(y0 + valid_out_h, out_h)
+                x1 = min(x0 + valid_out_w, out_w)
+                output_canvas[:, y0:y1, x0:x1] = patch_out[:, : (y1 - y0), : (x1 - x0)]
+
+        return output_canvas
+
+    def _prepare_onnx_output_to_chw(self, model_name: str, output: np.ndarray) -> np.ndarray:
+        output_shape = self.local_output_shapes[model_name]
+        if output.ndim == 4:
+            # NCHW
+            if self._dim_equals(output_shape, 1, 3) or output.shape[1] == 3:
+                return output[0]
+            # NHWC
+            if self._dim_equals(output_shape, 3, 3) or output.shape[3] == 3:
+                return np.transpose(output[0], (2, 0, 1))
+            return output[0]
+        if output.ndim == 3:
+            if self._dim_equals(output_shape, 0, 3) or output.shape[0] == 3:
+                return output
+            if self._dim_equals(output_shape, 2, 3) or output.shape[2] == 3:
+                return np.transpose(output, (2, 0, 1))
+            return output
+        raise TritonClientError(f"Unsupported ONNX output rank: {output.ndim} for model '{model_name}'.")
+
+    def _extract_static_hw(self, input_shape: list[Any]) -> tuple[int, int] | None:
+        rank = len(input_shape)
+        if rank != 4:
+            return None
+        # NCHW
+        if self._dim_equals(input_shape, 1, 3):
+            h = input_shape[2]
+            w = input_shape[3]
+        # NHWC
+        elif self._dim_equals(input_shape, 3, 3):
+            h = input_shape[1]
+            w = input_shape[2]
+        else:
+            h = input_shape[2]
+            w = input_shape[3]
+        if isinstance(h, int) and isinstance(w, int) and h > 0 and w > 0:
+            return (h, w)
+        return None
+
+    def _infer_scale_factor(
+        self,
+        in_h: int,
+        in_w: int,
+        output_shape: list[Any],
+        fallback_scale: float,
+    ) -> float:
+        if len(output_shape) == 4:
+            # NCHW
+            if self._dim_equals(output_shape, 1, 3):
+                oh, ow = output_shape[2], output_shape[3]
+            # NHWC
+            elif self._dim_equals(output_shape, 3, 3):
+                oh, ow = output_shape[1], output_shape[2]
+            else:
+                oh, ow = output_shape[2], output_shape[3]
+            if isinstance(oh, int) and isinstance(ow, int) and oh > 0 and ow > 0:
+                sh = oh / in_h
+                sw = ow / in_w
+                if sh > 0 and abs(sh - sw) < 1e-6:
+                    return sh
+        return float(fallback_scale if fallback_scale > 0 else 2.0)
+
+    def _prepare_onnx_input(self, chw: np.ndarray, input_shape: list[Any]) -> np.ndarray:
+        rank = len(input_shape)
+        if rank == 4:
+            # Prefer NCHW when channel dimension is at index 1.
+            if self._dim_equals(input_shape, 1, 3):
+                return np.expand_dims(chw, axis=0).astype(np.float32)
+            # NHWC when channel dimension is at index 3.
+            if self._dim_equals(input_shape, 3, 3):
+                hwc = np.transpose(chw, (1, 2, 0))
+                return np.expand_dims(hwc, axis=0).astype(np.float32)
+            # Default to NCHW for unknown symbolic shapes.
+            return np.expand_dims(chw, axis=0).astype(np.float32)
+
+        if rank == 3:
+            if self._dim_equals(input_shape, 0, 3):
+                return chw.astype(np.float32)
+            if self._dim_equals(input_shape, 2, 3):
+                return np.transpose(chw, (1, 2, 0)).astype(np.float32)
+            return chw.astype(np.float32)
+
+        raise TritonClientError(f"Unsupported ONNX input rank: {rank} (shape={input_shape}).")
+
+    @staticmethod
+    def _dim_equals(shape: list[Any], idx: int, value: int) -> bool:
+        dim = shape[idx]
+        if isinstance(dim, int):
+            return dim == value
+        if isinstance(dim, str):
             try:
-                outputs = session.run([output_name], {input_name: tensor})
-                return outputs[0]
-            except Exception as exc:  # pragma: no cover - depends on model signature
-                last_exc = exc
-
-        raise TritonClientError(
-            f"ONNX local inference failed for model '{model_name}': {last_exc}"
-        )
+                return int(dim) == value
+            except ValueError:
+                return False
+        return False
 
     def _normalize_output_shape(self, output: np.ndarray) -> np.ndarray:
         if output.ndim == 3:
