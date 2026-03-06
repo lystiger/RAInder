@@ -5,7 +5,8 @@ services:
       tritonserver
       --model-repository=/models
       --model-control-mode=explicit
-      --load-model=super_resolution_model
+      --load-model=real_esrgan_x2
+      --load-model=real_esrgan_x4
     volumes:
       - ./model_repo:/models
     ports:
@@ -19,7 +20,7 @@ services:
       context: ./gateway_api
     environment:
       TRITON_URL: triton:8001
-      TRITON_MODEL_NAME: super_resolution_model
+      TRITON_MODEL_NAME: real_esrgan_x2
       CORS_ORIGINS: http://localhost:5173,http://localhost:5174
     depends_on:
       - triton

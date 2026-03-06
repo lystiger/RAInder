@@ -1,0 +1,27 @@
+name: "real_esrgan_x4"
+platform: "onnxruntime_onnx"
+default_model_filename: "model.onnx"
+max_batch_size: 0
+
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [ 3, -1, -1 ]
+  }
+]
+
+output [
+  {
+    name: "output"
+    data_type: TYPE_FP32
+    dims: [ 3, -1, -1 ]
+  }
+]
+
+instance_group [ { kind: KIND_GPU } ]
+optimization {
+  execution_accelerators {
+    gpu_execution_accelerator: [ { name: "tensorrt" } ]
+  }
+}

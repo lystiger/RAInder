@@ -25,6 +25,14 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+CPU-only laptop mode (no Triton/GPU):
+
+```bash
+cd gateway_api
+source .venv/bin/activate
+INFERENCE_BACKEND=onnx_local uvicorn app.main:app --reload
+```
+
 ## Quick Start (Webapp)
 
 ```bash

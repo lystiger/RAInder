@@ -42,7 +42,7 @@ def ready(model_name: str | None = None) -> dict[str, bool | str]:
     try:
         details = triton_client.readiness(model_name=model_name)
     except TritonClientError as exc:
-        raise HTTPException(status_code=503, detail=f"Triton readiness check failed: {exc}") from exc
+        raise HTTPException(status_code=503, detail=f"Inference readiness check failed: {exc}") from exc
 
     if not (details["server_live"] and details["server_ready"] and details["model_ready"]):
         raise HTTPException(status_code=503, detail=details)
@@ -52,7 +52,7 @@ def ready(model_name: str | None = None) -> dict[str, bool | str]:
 @app.post("/upscale", response_model=UpscaleResponseModel)
 async def upscale(
     image: UploadFile = File(...),
-    model_name: str = Form("real-esrgan"),
+    model_name: str = Form(""),
     scale_factor: float = Form(2.0),
 ) -> UpscaleResponseModel:
     raw = await image.read()
@@ -73,12 +73,16 @@ async def upscale(
     if scale_factor not in {2.0, 4.0}:
         raise HTTPException(status_code=400, detail="scale_factor must be 2.0 or 4.0.")
 
+    selected_model = model_name.strip()
+    if not selected_model:
+        selected_model = "real_esrgan_x2" if scale_factor == 2.0 else "real_esrgan_x4"
+
     try:
         result = triton_client.upscale(
-            raw_image=raw, model_name=model_name, scale_factor=scale_factor
+            raw_image=raw, model_name=selected_model, scale_factor=scale_factor
         )
     except TritonClientError as exc:
-        raise HTTPException(status_code=502, detail=f"Triton inference failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Inference failed: {exc}") from exc
 
     return UpscaleResponseModel(
         image_data=base64.b64encode(result.upscaled_image).decode("ascii"),

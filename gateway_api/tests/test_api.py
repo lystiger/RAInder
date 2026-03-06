@@ -32,7 +32,7 @@ def test_ready_returns_200_when_mock_mode(monkeypatch) -> None:
             "server_live": True,
             "server_ready": True,
             "model_ready": True,
-            "model_name": model_name or "super_resolution_model",
+            "model_name": model_name or "real_esrgan_x2",
         },
     )
     client = TestClient(app)
@@ -53,7 +53,7 @@ def test_ready_returns_503_when_model_not_ready(monkeypatch) -> None:
             "server_live": True,
             "server_ready": True,
             "model_ready": False,
-            "model_name": model_name or "super_resolution_model",
+            "model_name": model_name or "real_esrgan_x2",
         },
     )
     client = TestClient(app)
@@ -81,7 +81,7 @@ def test_upscale_success(monkeypatch) -> None:
     client = TestClient(app)
     payload = _png_bytes()
     files = {"image": ("test.png", payload, "image/png")}
-    data = {"model_name": "super_resolution_model", "scale_factor": "2.0"}
+    data = {"model_name": "real_esrgan_x2", "scale_factor": "2.0"}
     response = client.post("/upscale", files=files, data=data)
 
     assert response.status_code == 200
@@ -99,6 +99,6 @@ def test_upscale_rejects_unsupported_image(monkeypatch) -> None:
 
     client = TestClient(app)
     files = {"image": ("note.txt", b"not-an-image", "text/plain")}
-    data = {"model_name": "super_resolution_model", "scale_factor": "2.0"}
+    data = {"model_name": "real_esrgan_x2", "scale_factor": "2.0"}
     response = client.post("/upscale", files=files, data=data)
     assert response.status_code == 400

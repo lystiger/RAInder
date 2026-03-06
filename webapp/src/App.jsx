@@ -14,7 +14,7 @@ export default function App() {
   const [sourceUrl, setSourceUrl] = useState("");
   const [resultUrl, setResultUrl] = useState("");
   const [scaleFactor, setScaleFactor] = useState("2.0");
-  const [modelName, setModelName] = useState("super_resolution_model");
+  const [modelName, setModelName] = useState("real_esrgan_x2");
   const [slider, setSlider] = useState(50);
   const [latencyMs, setLatencyMs] = useState(null);
   const [status, setStatus] = useState("idle");
@@ -156,7 +156,9 @@ export default function App() {
               <select
                 value={scaleFactor}
                 onChange={(e) => {
-                  setScaleFactor(e.target.value);
+                  const nextScale = e.target.value;
+                  setScaleFactor(nextScale);
+                  setModelName(nextScale === "2.0" ? "real_esrgan_x2" : "real_esrgan_x4");
                   setProgressPct(0);
                   setStatus("ready");
                 }}
@@ -168,7 +170,10 @@ export default function App() {
 
             <label>
               Model
-              <input value={modelName} onChange={(e) => setModelName(e.target.value)} />
+              <select value={modelName} onChange={(e) => setModelName(e.target.value)}>
+                <option value="real_esrgan_x2">Real-ESRGAN x2</option>
+                <option value="real_esrgan_x4">Real-ESRGAN x4</option>
+              </select>
             </label>
 
             <button disabled={isLoading} type="submit">

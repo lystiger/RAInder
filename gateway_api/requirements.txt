@@ -7,3 +7,4 @@ grpcio-tools==1.67.1
 numpy==2.3.3
 Pillow==11.3.0
 tritonclient[grpc]==2.61.0
+onnxruntime==1.20.1
