@@ -29,13 +29,16 @@ export default function App() {
   const fileInputRef = useRef(null);
 
   const hasBoth = useMemo(() => Boolean(sourceUrl && resultUrl), [sourceUrl, resultUrl]);
+  const isFinalizing = isLoading && progressPct >= 95;
 
   useEffect(() => {
     if (!isLoading) return undefined;
     const timer = setInterval(() => {
       setProgressPct((prev) => {
-        if (prev >= 92) return prev;
-        return Math.min(92, prev + Math.max(2, Math.floor((100 - prev) * 0.08)));
+        if (prev >= 98) return prev;
+        if (prev < 70) return Math.min(98, prev + 5);
+        if (prev < 90) return Math.min(98, prev + 2);
+        return Math.min(98, prev + 1);
       });
     }, 180);
     return () => clearInterval(timer);
@@ -213,7 +216,10 @@ export default function App() {
               <small className="backend-detail">{backendModel}</small>
             </div>
           </div>
-          <p className="state-note">State: {status}</p>
+          <p className="state-note">
+            State: {status}
+            {isFinalizing ? " (finalizing...)" : ""}
+          </p>
 
           {error ? <p className="error">{error}</p> : null}
         </section>
