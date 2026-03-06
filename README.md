@@ -1,2 +1,2 @@
 # RAInder
-AI upscaling playground
+Custom AI upscaling playground with Triton and UI
