@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -20,19 +20,58 @@ export default function App() {
   const [status, setStatus] = useState("idle");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [progressPct, setProgressPct] = useState(0);
+  const [frameAspect, setFrameAspect] = useState("4 / 3");
+  const comparePanelRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const hasBoth = useMemo(() => Boolean(sourceUrl && resultUrl), [sourceUrl, resultUrl]);
 
-  function handleFileChange(event) {
+  useEffect(() => {
+    if (!isLoading) return undefined;
+    const timer = setInterval(() => {
+      setProgressPct((prev) => {
+        if (prev >= 92) return prev;
+        return Math.min(92, prev + Math.max(2, Math.floor((100 - prev) * 0.08)));
+      });
+    }, 180);
+    return () => clearInterval(timer);
+  }, [isLoading]);
+
+  useEffect(() => {
+    if (hasBoth && status === "success") {
+      comparePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [hasBoth, status]);
+
+  useEffect(
+    () => () => {
+      if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+    },
+    [sourceUrl]
+  );
+
+  async function handleFileChange(event) {
     const selected = event.target.files?.[0];
     if (!selected) return;
     setFile(selected);
-    setSourceUrl(URL.createObjectURL(selected));
+    const nextUrl = URL.createObjectURL(selected);
+    setSourceUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return nextUrl;
+    });
+    try {
+      const ratio = await readImageAspectRatio(nextUrl);
+      setFrameAspect(ratio);
+    } catch (_err) {
+      setFrameAspect("4 / 3");
+    }
     setResultUrl("");
     setLatencyMs(null);
     setStatus("ready");
     setError("");
     setSlider(50);
+    setProgressPct(0);
   }
 
   async function handleUpscale(event) {
@@ -45,6 +84,7 @@ export default function App() {
     setIsLoading(true);
     setError("");
     setStatus("processing");
+    setProgressPct(0);
 
     try {
       const formData = new FormData();
@@ -65,9 +105,11 @@ export default function App() {
       setResultUrl(createDataUrl(data.image_data));
       setLatencyMs(data.inference_time_ms);
       setStatus(data.status || "success");
+      setProgressPct(100);
     } catch (err) {
       setStatus("failure");
       setError(err.message || "Unknown error");
+      setProgressPct(0);
     } finally {
       setIsLoading(false);
     }
@@ -90,12 +132,35 @@ export default function App() {
           <form onSubmit={handleUpscale} className="controls">
             <label>
               Source image
-              <input type="file" accept="image/png,image/jpeg" onChange={handleFileChange} />
+              <div className="file-picker">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg"
+                  onChange={handleFileChange}
+                  className="file-input-hidden"
+                />
+                <button
+                  type="button"
+                  className="file-button"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  Choose image
+                </button>
+                <span className="file-name">{file ? file.name : "No file selected"}</span>
+              </div>
             </label>
 
             <label>
               Scale factor
-              <select value={scaleFactor} onChange={(e) => setScaleFactor(e.target.value)}>
+              <select
+                value={scaleFactor}
+                onChange={(e) => {
+                  setScaleFactor(e.target.value);
+                  setProgressPct(0);
+                  setStatus("ready");
+                }}
+              >
                 <option value="2.0">2x</option>
                 <option value="4.0">4x</option>
               </select>
@@ -113,8 +178,13 @@ export default function App() {
 
           <div className="metrics">
             <div>
-              <span>Status</span>
-              <strong>{status}</strong>
+              <span>Progress</span>
+              <div className="progress-shell" aria-label="Upscale progress">
+                <div className="progress-liquid" style={{ width: `${progressPct}%` }}>
+                  <div className="progress-wave" />
+                </div>
+              </div>
+              <strong>{progressPct}%</strong>
             </div>
             <div>
               <span>Inference</span>
@@ -125,11 +195,12 @@ export default function App() {
               <strong>{API_BASE}</strong>
             </div>
           </div>
+          <p className="state-note">State: {status}</p>
 
           {error ? <p className="error">{error}</p> : null}
         </section>
 
-        <section className="panel">
+        <section className="panel" ref={comparePanelRef}>
           {hasBoth ? (
             <>
               <div className="compare">
@@ -155,10 +226,27 @@ export default function App() {
               <p className="compare-note">Top: original input. Bottom: upscaled output.</p>
             </>
           ) : (
-            <div className="empty">Upload and run an image to see the comparison preview.</div>
+            <div className="empty" style={{ aspectRatio: frameAspect }}>
+              Upload and run an image to see the comparison preview.
+            </div>
           )}
         </section>
       </main>
     </div>
   );
+}
+
+function readImageAspectRatio(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      if (!img.naturalWidth || !img.naturalHeight) {
+        reject(new Error("Invalid image dimensions"));
+        return;
+      }
+      resolve(`${img.naturalWidth} / ${img.naturalHeight}`);
+    };
+    img.onerror = () => reject(new Error("Failed to read image dimensions"));
+    img.src = url;
+  });
 }
