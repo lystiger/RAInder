@@ -24,6 +24,43 @@ class TritonResult:
     compute_latency_ms: float
 
 
+@dataclass(frozen=True)
+class ModelProfile:
+    input_name: str
+    output_name: str
+    input_layout: str  # nchw or nhwc
+    output_layout: str  # nchw, nhwc, chw
+    input_rank: int
+    tile_hw: tuple[int, int] | None = None
+
+
+MODEL_PROFILES: dict[str, ModelProfile] = {
+    "real_esrgan_x2": ModelProfile(
+        input_name="input",
+        output_name="output",
+        input_layout="nchw",
+        output_layout="nchw",
+        input_rank=4,
+        tile_hw=(64, 64),
+    ),
+    "real_esrgan_x4": ModelProfile(
+        input_name="image",
+        output_name="upscaled_image",
+        input_layout="nchw",
+        output_layout="chw",
+        input_rank=4,
+        tile_hw=(128, 128),
+    ),
+    "anime_gan_hayao": ModelProfile(
+        input_name="generator_input:0",
+        output_name="generator/G_MODEL/out_layer/Tanh:0",
+        input_layout="nhwc",
+        output_layout="nhwc",
+        input_rank=4,
+    ),
+}
+
+
 class TritonClientError(Exception):
     pass
 
@@ -97,32 +134,26 @@ class TritonClient:
         if self.backend == "onnx_local":
             return self._onnx_local_upscale(raw_image, model_name, scale_factor)
 
-        request_model = model_name if model_name else self.default_model_name
+        request_model = model_name.strip() if model_name else self.default_model_name
+        profile = MODEL_PROFILES.get(
+            request_model,
+            ModelProfile(
+                input_name="input",
+                output_name="output",
+                input_layout="nchw",
+                output_layout="nchw",
+                input_rank=3,
+            ),
+        )
         chw = decode_image_to_chw_fp32(raw_image)
 
-        infer_input = grpcclient.InferInput("input", list(chw.shape), "FP32")
-        infer_input.set_data_from_numpy(chw.astype(np.float32))
-        output_req = grpcclient.InferRequestedOutput("output")
-
         started = perf_counter()
-        try:
-            if self.client is None:
-                raise TritonClientError("Triton client is not initialized.")
-            response = self.client.infer(
-                model_name=request_model,
-                inputs=[infer_input],
-                outputs=[output_req],
-            )
-        except InferenceServerException as exc:
-            raise TritonClientError(str(exc)) from exc
-
+        if profile.tile_hw is not None:
+            output_chw = self._triton_tiled_upscale(request_model, chw, profile, scale_factor)
+        else:
+            output_chw = self._triton_single_infer(request_model, chw, profile)
         duration_ms = (perf_counter() - started) * 1000.0
 
-        output = response.as_numpy("output")
-        if output is None:
-            raise TritonClientError("Triton returned no output tensor named 'output'.")
-
-        output_chw = self._normalize_output_shape(output)
         upscaled_image, width, height = encode_chw_fp32_to_png_bytes(output_chw)
 
         return TritonResult(
@@ -130,6 +161,134 @@ class TritonClient:
             width=width,
             height=height,
             compute_latency_ms=duration_ms,
+        )
+
+    def _triton_single_infer(
+        self,
+        model_name: str,
+        chw: np.ndarray,
+        profile: ModelProfile,
+    ) -> np.ndarray:
+        tensor = self._prepare_triton_input(chw, profile)
+
+        infer_input = grpcclient.InferInput(profile.input_name, list(tensor.shape), "FP32")
+        infer_input.set_data_from_numpy(tensor)
+        output_req = grpcclient.InferRequestedOutput(profile.output_name)
+
+        try:
+            if self.client is None:
+                raise TritonClientError("Triton client is not initialized.")
+            response = self.client.infer(
+                model_name=model_name,
+                inputs=[infer_input],
+                outputs=[output_req],
+            )
+        except InferenceServerException as exc:
+            raise TritonClientError(str(exc)) from exc
+
+        output = response.as_numpy(profile.output_name)
+        if output is None:
+            raise TritonClientError(
+                f"Triton returned no output tensor named '{profile.output_name}' for model '{model_name}'."
+            )
+
+        return self._normalize_output(output, profile)
+
+    def _triton_tiled_upscale(
+        self,
+        model_name: str,
+        chw: np.ndarray,
+        profile: ModelProfile,
+        fallback_scale: float,
+    ) -> np.ndarray:
+        if profile.tile_hw is None:
+            return self._triton_single_infer(model_name, chw, profile)
+
+        tile_h, tile_w = profile.tile_hw
+        in_h, in_w = chw.shape[1], chw.shape[2]
+        output_scale = float(fallback_scale if fallback_scale > 0 else 1.0)
+        out_h = int(round(in_h * output_scale))
+        out_w = int(round(in_w * output_scale))
+        output_canvas = np.zeros((3, out_h, out_w), dtype=np.float32)
+
+        inferred_scale: float | None = None
+
+        for top in range(0, in_h, tile_h):
+            for left in range(0, in_w, tile_w):
+                bottom = min(top + tile_h, in_h)
+                right = min(left + tile_w, in_w)
+                patch = chw[:, top:bottom, left:right]
+
+                pad_h = tile_h - patch.shape[1]
+                pad_w = tile_w - patch.shape[2]
+                if pad_h > 0 or pad_w > 0:
+                    patch = np.pad(
+                        patch,
+                        ((0, 0), (0, pad_h), (0, pad_w)),
+                        mode="edge",
+                    )
+
+                patch_out = self._triton_single_infer(model_name, patch, profile)
+
+                if inferred_scale is None and tile_h > 0 and tile_w > 0:
+                    sh = patch_out.shape[1] / tile_h
+                    sw = patch_out.shape[2] / tile_w
+                    if sh > 0 and abs(sh - sw) < 1e-6:
+                        inferred_scale = sh
+                        out_h = int(round(in_h * inferred_scale))
+                        out_w = int(round(in_w * inferred_scale))
+                        output_canvas = np.zeros((3, out_h, out_w), dtype=np.float32)
+
+                scale = inferred_scale if inferred_scale is not None else output_scale
+                valid_out_h = int(round((bottom - top) * scale))
+                valid_out_w = int(round((right - left) * scale))
+
+                y0 = int(round(top * scale))
+                x0 = int(round(left * scale))
+                y1 = min(y0 + valid_out_h, out_h)
+                x1 = min(x0 + valid_out_w, out_w)
+
+                output_canvas[:, y0:y1, x0:x1] = patch_out[:, : (y1 - y0), : (x1 - x0)]
+
+        return output_canvas
+
+    def _prepare_triton_input(self, chw: np.ndarray, profile: ModelProfile) -> np.ndarray:
+        if profile.input_layout == "nchw":
+            if profile.input_rank == 4:
+                return np.expand_dims(chw, axis=0).astype(np.float32)
+            if profile.input_rank == 3:
+                return chw.astype(np.float32)
+        elif profile.input_layout == "nhwc":
+            hwc = np.transpose(chw, (1, 2, 0))
+            if profile.input_rank == 4:
+                return np.expand_dims(hwc, axis=0).astype(np.float32)
+            if profile.input_rank == 3:
+                return hwc.astype(np.float32)
+
+        raise TritonClientError(
+            f"Unsupported Triton input format for profile: layout={profile.input_layout}, "
+            f"rank={profile.input_rank}."
+        )
+
+    def _normalize_output(self, output: np.ndarray, profile: ModelProfile) -> np.ndarray:
+        if profile.output_layout == "nchw":
+            if output.ndim == 4:
+                return output[0]
+            if output.ndim == 3:
+                return output
+        elif profile.output_layout == "nhwc":
+            if output.ndim == 4:
+                return np.transpose(output[0], (2, 0, 1))
+            if output.ndim == 3:
+                return np.transpose(output, (2, 0, 1))
+        elif profile.output_layout == "chw":
+            if output.ndim == 3:
+                return output
+            if output.ndim == 4:
+                return output[0]
+
+        raise TritonClientError(
+            f"Unexpected output tensor shape from Triton for layout '{profile.output_layout}': {output.shape}."
         )
 
     def _init_onnx_local(self) -> None:
@@ -150,6 +309,12 @@ class TritonClient:
                 os.getenv(
                     "ONNX_MODEL_X4_PATH",
                     str(root / "model_repo" / "real_esrgan_x4" / "1" / "model.onnx"),
+                )
+            ),
+            "anime_gan_hayao": Path(
+                os.getenv(
+                    "ONNX_MODEL_ANIME_HAYAO_PATH",
+                    str(root / "model_repo" / "AnimeGANv2_Hayao.onnx"),
                 )
             ),
         }
@@ -328,7 +493,19 @@ class TritonClient:
                 sw = ow / in_w
                 if sh > 0 and abs(sh - sw) < 1e-6:
                     return sh
-        return float(fallback_scale if fallback_scale > 0 else 2.0)
+        if len(output_shape) == 3:
+            if self._dim_equals(output_shape, 0, 3):
+                oh, ow = output_shape[1], output_shape[2]
+            elif self._dim_equals(output_shape, 2, 3):
+                oh, ow = output_shape[0], output_shape[1]
+            else:
+                oh, ow = output_shape[1], output_shape[2]
+            if isinstance(oh, int) and isinstance(ow, int) and oh > 0 and ow > 0:
+                sh = oh / in_h
+                sw = ow / in_w
+                if sh > 0 and abs(sh - sw) < 1e-6:
+                    return sh
+        return float(fallback_scale if fallback_scale > 0 else 1.0)
 
     def _prepare_onnx_input(self, chw: np.ndarray, input_shape: list[Any]) -> np.ndarray:
         rank = len(input_shape)
@@ -363,15 +540,6 @@ class TritonClient:
             except ValueError:
                 return False
         return False
-
-    def _normalize_output_shape(self, output: np.ndarray) -> np.ndarray:
-        if output.ndim == 3:
-            return output
-        if output.ndim == 4 and output.shape[0] == 1:
-            return output[0]
-        raise TritonClientError(
-            f"Unexpected output tensor shape from Triton: {output.shape}."
-        )
 
     def _mock_upscale(self, raw_image: bytes, scale_factor: float) -> TritonResult:
         from PIL import Image

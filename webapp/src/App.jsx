@@ -27,6 +27,7 @@ export default function App() {
   const [backendModel, setBackendModel] = useState("-");
   const comparePanelRef = useRef(null);
   const fileInputRef = useRef(null);
+  const isAnimeModel = modelName === "anime_gan_hayao";
 
   const hasBoth = useMemo(() => Boolean(sourceUrl && resultUrl), [sourceUrl, resultUrl]);
   const isFinalizing = isLoading && progressPct >= 95;
@@ -99,10 +100,15 @@ export default function App() {
     try {
       const formData = new FormData();
       formData.append("image", file);
-      formData.append("model_name", modelName);
-      formData.append("scale_factor", scaleFactor);
+      let endpoint = "/upscale";
+      if (modelName === "anime_gan_hayao") {
+        endpoint = "/anime/hayao";
+      } else {
+        formData.append("model_name", modelName);
+        formData.append("scale_factor", scaleFactor);
+      }
 
-      const response = await fetch(`${API_BASE}/upscale`, {
+      const response = await fetch(`${API_BASE}${endpoint}`, {
         method: "POST",
         body: formData
       });
@@ -161,33 +167,49 @@ export default function App() {
               </div>
             </label>
 
-            <label>
-              Scale factor
-              <select
-                value={scaleFactor}
-                onChange={(e) => {
-                  const nextScale = e.target.value;
-                  setScaleFactor(nextScale);
-                  setModelName(nextScale === "2.0" ? "real_esrgan_x2" : "real_esrgan_x4");
-                  setProgressPct(0);
-                  setStatus("ready");
-                }}
-              >
-                <option value="2.0">2x</option>
-                <option value="4.0">4x</option>
-              </select>
-            </label>
+            {isAnimeModel ? (
+              <label>
+                Operation
+                <select value="anime_style_transfer" disabled>
+                  <option value="anime_style_transfer">Style transfer (anime)</option>
+                </select>
+              </label>
+            ) : (
+              <label>
+                Scale factor
+                <select
+                  value={scaleFactor}
+                  onChange={(e) => {
+                    const nextScale = e.target.value;
+                    setScaleFactor(nextScale);
+                    setModelName(nextScale === "2.0" ? "real_esrgan_x2" : "real_esrgan_x4");
+                    setProgressPct(0);
+                    setStatus("ready");
+                  }}
+                >
+                  <option value="2.0">2x</option>
+                  <option value="4.0">4x</option>
+                </select>
+              </label>
+            )}
 
             <label>
               Model
               <select value={modelName} onChange={(e) => setModelName(e.target.value)}>
                 <option value="real_esrgan_x2">Real-ESRGAN x2</option>
                 <option value="real_esrgan_x4">Real-ESRGAN x4</option>
+                <option value="anime_gan_hayao">AnimeGANv2 Hayao</option>
               </select>
             </label>
 
             <button disabled={isLoading} type="submit">
-              {isLoading ? "Upscaling..." : "Run Upscale"}
+              {isLoading
+                ? isAnimeModel
+                  ? "Styling..."
+                  : "Upscaling..."
+                : isAnimeModel
+                  ? "Run Style Transfer"
+                  : "Run Upscale"}
             </button>
           </form>
 

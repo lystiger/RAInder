@@ -1,13 +1,13 @@
 name: "real_esrgan_x2"
 platform: "onnxruntime_onnx"
 default_model_filename: "model.onnx"
-max_batch_size: 0
+max_batch_size: 1
 
 input [
   {
     name: "input"
     data_type: TYPE_FP32
-    dims: [ 3, -1, -1 ]
+    dims: [ 3, 64, 64 ]
   }
 ]
 

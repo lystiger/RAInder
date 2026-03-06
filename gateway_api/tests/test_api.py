@@ -102,3 +102,31 @@ def test_upscale_rejects_unsupported_image(monkeypatch) -> None:
     data = {"model_name": "real_esrgan_x2", "scale_factor": "2.0"}
     response = client.post("/upscale", files=files, data=data)
     assert response.status_code == 400
+
+
+def test_anime_hayao_success(monkeypatch) -> None:
+    from app import main
+
+    styled = _png_bytes((48, 48), (140, 90, 190))
+
+    monkeypatch.setattr(
+        main.triton_client,
+        "upscale",
+        lambda raw_image, model_name, scale_factor: TritonResult(
+            upscaled_image=styled,
+            width=48,
+            height=48,
+            compute_latency_ms=9.3,
+        ),
+    )
+
+    client = TestClient(app)
+    payload = _png_bytes()
+    files = {"image": ("test.png", payload, "image/png")}
+    response = client.post("/anime/hayao", files=files)
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "success"
+    assert result["inference_time_ms"] == 9.3
+

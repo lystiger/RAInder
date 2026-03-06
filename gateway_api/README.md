@@ -7,6 +7,7 @@ FastAPI API Gateway for RAInder.
 - `GET /health`: basic health probe.
 - `GET /ready`: readiness probe for Triton and selected model.
 - `POST /upscale`: accepts image upload and forwards inference request to Triton over gRPC.
+- `POST /anime/hayao`: anime style transfer using `anime_gan_hayao`.
 
 ## Run
 
@@ -26,6 +27,7 @@ uvicorn app.main:app --reload --log-config logging.ini
 - `TRITON_MOCK` (default: `false`): if true, use bicubic mock upscale path.
 - `ONNX_MODEL_X2_PATH`: local ONNX path used in `onnx_local` mode.
 - `ONNX_MODEL_X4_PATH`: local ONNX path used in `onnx_local` mode.
+- `ONNX_MODEL_ANIME_HAYAO_PATH`: local ONNX path for anime Hayao model.
 - `CORS_ORIGINS`: comma-separated allowed web origins.
 
 ## Non-GPU Local Run (Ubuntu Laptop)

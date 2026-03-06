@@ -7,6 +7,7 @@ services:
       --model-control-mode=explicit
       --load-model=real_esrgan_x2
       --load-model=real_esrgan_x4
+      --load-model=anime_gan_hayao
     volumes:
       - ./model_repo:/models
     ports:
