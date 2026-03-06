@@ -4,3 +4,6 @@ python-multipart==0.0.20
 pydantic==2.11.9
 grpcio==1.76.0
 grpcio-tools==1.76.0
+numpy==2.3.3
+Pillow==11.3.0
+tritonclient[grpc]==2.61.0

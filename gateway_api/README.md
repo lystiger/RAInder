@@ -5,7 +5,7 @@ FastAPI API Gateway for RAInder.
 ## Endpoints
 
 - `GET /health`: basic health probe.
-- `POST /upscale`: accepts image upload and forwards inference request to Triton (stubbed for now).
+- `POST /upscale`: accepts image upload and forwards inference request to Triton over gRPC.
 
 ## Run
 
@@ -17,8 +17,14 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+## Environment Variables
+
+- `TRITON_URL` (default: `localhost:8001`): Triton gRPC endpoint.
+- `TRITON_MODEL_NAME` (default: `super_resolution_model`): fallback model name.
+- `TRITON_MOCK` (default: `false`): if true, use bicubic mock upscale path.
+
 ## Next Implementation Steps
 
 1. Generate Python gRPC stubs from `proto/upscale.proto`.
-2. Implement `app/triton_client.py` to call Triton `Process`.
-3. Add preprocessing (NCHW FP32) and postprocessing logic.
+2. Wire model-specific pre/postprocessing for Real-ESRGAN.
+3. Add integration tests against a running Triton container.

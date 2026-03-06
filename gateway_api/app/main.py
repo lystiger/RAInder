@@ -2,7 +2,7 @@ import base64
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from .schemas import UpscaleResponseModel
-from .triton_client import TritonClient
+from .triton_client import TritonClient, TritonClientError
 
 app = FastAPI(title="RAInder Gateway API", version="0.1.0")
 triton_client = TritonClient()
@@ -28,13 +28,15 @@ async def upscale(
     raw = await image.read()
     if len(raw) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File exceeds 10 MB limit.")
+    if scale_factor not in {2.0, 4.0}:
+        raise HTTPException(status_code=400, detail="scale_factor must be 2.0 or 4.0.")
 
     try:
         result = triton_client.upscale(
             raw_image=raw, model_name=model_name, scale_factor=scale_factor
         )
-    except NotImplementedError as exc:
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except TritonClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Triton inference failed: {exc}") from exc
 
     return UpscaleResponseModel(
         image_data=base64.b64encode(result.upscaled_image).decode("ascii"),
