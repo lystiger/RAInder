@@ -1,0 +1,2 @@
+# RAInder
+AI upscaling playground
