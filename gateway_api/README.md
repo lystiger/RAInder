@@ -63,5 +63,17 @@ pytest -q
 ```bash
 cd gateway_api
 source .venv/bin/activate
-python scripts/benchmark_upscale.py --image ../docs/Architecture.png --runs 20 --warmup 3
+python scripts/benchmark_upscale.py \
+  --images ../test.png \
+  --models real_esrgan_x2 real_esrgan_x4 anime_gan_hayao \
+  --runs 20 \
+  --warmup 3 \
+  --output-json benchmark_results.json \
+  --output-csv benchmark_results.csv
 ```
+
+Notes:
+
+- `real_esrgan_x2` and `real_esrgan_x4` use `POST /upscale`
+- `anime_gan_hayao` uses `POST /anime/hayao`
+- GPU metrics are sampled with `nvidia-smi` when available
