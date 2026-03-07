@@ -32,6 +32,8 @@ class ModelProfile:
     output_layout: str  # nchw, nhwc, chw
     input_rank: int
     tile_hw: tuple[int, int] | None = None
+    input_range: str = "zero_to_one"
+    output_range: str = "zero_to_one"
 
 
 MODEL_PROFILES: dict[str, ModelProfile] = {
@@ -57,6 +59,8 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         input_layout="nhwc",
         output_layout="nhwc",
         input_rank=4,
+        input_range="neg_one_to_one",
+        output_range="neg_one_to_one",
     ),
 }
 
@@ -253,13 +257,14 @@ class TritonClient:
         return output_canvas
 
     def _prepare_triton_input(self, chw: np.ndarray, profile: ModelProfile) -> np.ndarray:
+        normalized = self._apply_input_range(chw, profile)
         if profile.input_layout == "nchw":
             if profile.input_rank == 4:
-                return np.expand_dims(chw, axis=0).astype(np.float32)
+                return np.expand_dims(normalized, axis=0).astype(np.float32)
             if profile.input_rank == 3:
-                return chw.astype(np.float32)
+                return normalized.astype(np.float32)
         elif profile.input_layout == "nhwc":
-            hwc = np.transpose(chw, (1, 2, 0))
+            hwc = np.transpose(normalized, (1, 2, 0))
             if profile.input_rank == 4:
                 return np.expand_dims(hwc, axis=0).astype(np.float32)
             if profile.input_rank == 3:
@@ -273,19 +278,22 @@ class TritonClient:
     def _normalize_output(self, output: np.ndarray, profile: ModelProfile) -> np.ndarray:
         if profile.output_layout == "nchw":
             if output.ndim == 4:
-                return output[0]
+                chw = output[0]
+                return self._apply_output_range(chw, profile)
             if output.ndim == 3:
-                return output
+                return self._apply_output_range(output, profile)
         elif profile.output_layout == "nhwc":
             if output.ndim == 4:
-                return np.transpose(output[0], (2, 0, 1))
+                chw = np.transpose(output[0], (2, 0, 1))
+                return self._apply_output_range(chw, profile)
             if output.ndim == 3:
-                return np.transpose(output, (2, 0, 1))
+                chw = np.transpose(output, (2, 0, 1))
+                return self._apply_output_range(chw, profile)
         elif profile.output_layout == "chw":
             if output.ndim == 3:
-                return output
+                return self._apply_output_range(output, profile)
             if output.ndim == 4:
-                return output[0]
+                return self._apply_output_range(output[0], profile)
 
         raise TritonClientError(
             f"Unexpected output tensor shape from Triton for layout '{profile.output_layout}': {output.shape}."
@@ -378,7 +386,7 @@ class TritonClient:
         output_name = self.local_output_names[model_name]
         input_shape = self.local_input_shapes[model_name]
         expected_rank = len(input_shape)
-        tensor = self._prepare_onnx_input(chw, input_shape)
+        tensor = self._prepare_onnx_input(model_name, chw, input_shape)
         if tensor.ndim != expected_rank:
             raise TritonClientError(
                 f"ONNX input rank mismatch for model '{model_name}': "
@@ -437,20 +445,23 @@ class TritonClient:
 
     def _prepare_onnx_output_to_chw(self, model_name: str, output: np.ndarray) -> np.ndarray:
         output_shape = self.local_output_shapes[model_name]
+        profile = MODEL_PROFILES.get(model_name, ModelProfile("", "", "nchw", "nchw", 4))
         if output.ndim == 4:
             # NCHW
             if self._dim_equals(output_shape, 1, 3) or output.shape[1] == 3:
-                return output[0]
+                return self._apply_output_range(output[0], profile)
             # NHWC
             if self._dim_equals(output_shape, 3, 3) or output.shape[3] == 3:
-                return np.transpose(output[0], (2, 0, 1))
-            return output[0]
+                chw = np.transpose(output[0], (2, 0, 1))
+                return self._apply_output_range(chw, profile)
+            return self._apply_output_range(output[0], profile)
         if output.ndim == 3:
             if self._dim_equals(output_shape, 0, 3) or output.shape[0] == 3:
-                return output
+                return self._apply_output_range(output, profile)
             if self._dim_equals(output_shape, 2, 3) or output.shape[2] == 3:
-                return np.transpose(output, (2, 0, 1))
-            return output
+                chw = np.transpose(output, (2, 0, 1))
+                return self._apply_output_range(chw, profile)
+            return self._apply_output_range(output, profile)
         raise TritonClientError(f"Unsupported ONNX output rank: {output.ndim} for model '{model_name}'.")
 
     def _extract_static_hw(self, input_shape: list[Any]) -> tuple[int, int] | None:
@@ -507,27 +518,44 @@ class TritonClient:
                     return sh
         return float(fallback_scale if fallback_scale > 0 else 1.0)
 
-    def _prepare_onnx_input(self, chw: np.ndarray, input_shape: list[Any]) -> np.ndarray:
+    def _prepare_onnx_input(
+        self,
+        model_name: str,
+        chw: np.ndarray,
+        input_shape: list[Any],
+    ) -> np.ndarray:
+        profile = MODEL_PROFILES.get(model_name, ModelProfile("", "", "nchw", "nchw", len(input_shape)))
+        normalized = self._apply_input_range(chw, profile)
         rank = len(input_shape)
         if rank == 4:
             # Prefer NCHW when channel dimension is at index 1.
             if self._dim_equals(input_shape, 1, 3):
-                return np.expand_dims(chw, axis=0).astype(np.float32)
+                return np.expand_dims(normalized, axis=0).astype(np.float32)
             # NHWC when channel dimension is at index 3.
             if self._dim_equals(input_shape, 3, 3):
-                hwc = np.transpose(chw, (1, 2, 0))
+                hwc = np.transpose(normalized, (1, 2, 0))
                 return np.expand_dims(hwc, axis=0).astype(np.float32)
             # Default to NCHW for unknown symbolic shapes.
-            return np.expand_dims(chw, axis=0).astype(np.float32)
+            return np.expand_dims(normalized, axis=0).astype(np.float32)
 
         if rank == 3:
             if self._dim_equals(input_shape, 0, 3):
-                return chw.astype(np.float32)
+                return normalized.astype(np.float32)
             if self._dim_equals(input_shape, 2, 3):
-                return np.transpose(chw, (1, 2, 0)).astype(np.float32)
-            return chw.astype(np.float32)
+                return np.transpose(normalized, (1, 2, 0)).astype(np.float32)
+            return normalized.astype(np.float32)
 
         raise TritonClientError(f"Unsupported ONNX input rank: {rank} (shape={input_shape}).")
+
+    def _apply_input_range(self, chw: np.ndarray, profile: ModelProfile) -> np.ndarray:
+        if profile.input_range == "neg_one_to_one":
+            return (chw * 2.0) - 1.0
+        return chw
+
+    def _apply_output_range(self, chw: np.ndarray, profile: ModelProfile) -> np.ndarray:
+        if profile.output_range == "neg_one_to_one":
+            return (chw + 1.0) / 2.0
+        return chw
 
     @staticmethod
     def _dim_equals(shape: list[Any], idx: int, value: int) -> bool:
