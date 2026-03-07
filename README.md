@@ -11,9 +11,17 @@ Custom AI upscaling playground with Triton and UI.
 
 ## Current Status
 
-- M1 bootstrap complete: `docs/system_design.md` and initial gRPC contract.
-- M2 bootstrap complete: Triton `config.pbtxt` scaffold.
-- M3 bootstrap complete: FastAPI `/health` and `/upscale` endpoint skeleton.
+- M1 complete: architecture docs, sequence diagrams, and initial gRPC contract.
+- M2 complete: Triton model repository, Docker Compose wiring, and local Triton runtime validation.
+- M3 complete: FastAPI gateway with `/health`, `/ready`, `/upscale`, anime route support, and automated API coverage.
+- M4 bootstrap complete: React webapp with upload flow, model selection, and before/after comparison UI.
+
+## Recent Progress
+
+- Triton Docker Compose stack has been validated successfully on a target PC.
+- Added `onnx_local` CPU fallback for local evaluation without Triton/GPU.
+- Added regression coverage for AnimeGAN normalization/output handling.
+- Added `gateway_api/scripts/evaluate_models.py` for repeatable local model comparison runs.
 
 ## Quick Start (Gateway)
 
